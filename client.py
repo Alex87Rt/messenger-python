@@ -3,7 +3,7 @@ from socket import *
 import json
 
 with socket(AF_INET, SOCK_STREAM) as s:  # Создать сокет TCP
-    s.connect(("localhost", 8007))  # Соединиться с сервером
+    s.connect(("localhost", 8007))  # Соединиться с сервером, locallhost
 
     with open('client_config.json') as f:
         message_json = json.load(f)
