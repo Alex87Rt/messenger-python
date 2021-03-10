@@ -16,7 +16,7 @@ with socket(AF_INET, SOCK_STREAM) as s:  # Создает сокет TCP
             recv_msg = json.loads(str)
 
             if "action" in recv_msg and recv_msg['action'] == 'authenticate':
-                with open('server_config.json') as f:
+                with open('json/server_config.json') as f:
                     message = json.load(f)
                 message = json.dumps(message)
                 cl.send(message.encode("utf-8"))

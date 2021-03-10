@@ -1,19 +1,14 @@
-# Программа сервера для отправки приветствия сервера и получения ответа
+
 from socket import *
-import json
+from Client.client import Client
 
-with socket(AF_INET, SOCK_STREAM) as s:  # Создать сокет TCP
-    s.connect(("localhost", 8007))  # Соединиться с сервером, locallhost
 
-    with open('client_config.json') as f:
-        message_json = json.load(f)
+def main(HOST, PORT):
+    with socket(AF_INET, SOCK_STREAM) as s:
+        s.connect((HOST, PORT))
+        client_socket = Client(s)
+        print(client_socket)
 
-    message = json.dumps(message_json)
-    s.send(message.encode("utf-8"))
-    data = s.recv(1000000)
-    str = data.decode("utf-8")
-    print("Сообщение от сервера: ", str, ", длиной ", len(data), " байт")
 
-    recv_msg = json.loads(str)
-
-    print(f"Сообщение {recv_msg}")
+if __name__ == "__main__":
+    main("localhost", 8007)
