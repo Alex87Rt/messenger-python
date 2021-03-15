@@ -1,14 +1,18 @@
-
 from socket import *
-from Client.client import Client
+import client_def
+from contextlib import closing
 
+from log.client_log_config import *
 
-def main(HOST, PORT):
-    with socket(AF_INET, SOCK_STREAM) as s:
-        s.connect((HOST, PORT))
-        client_socket = Client(s)
-        print(client_socket)
+host = '127.0.0.1'
+port = 8006
 
-
-if __name__ == "__main__":
-    main("localhost", 8007)
+with socket(AF_INET, SOCK_STREAM) as s:
+    client_data_to_send = client_def.client_data_encode()
+    s.connect((host, port))
+    s.send(client_data_to_send)
+    with closing(s):
+        data = s.recv(10000)
+        message = client_def.server_resp_to_str(data)
+        print(message)
+        client_logger.debug(message)

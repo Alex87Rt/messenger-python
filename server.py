@@ -1,22 +1,20 @@
-# Программа сервера для получения приветствия от клиента и отправки ответа
-from contextlib import closing
 from socket import *
-import json
+from contextlib import closing
+import server_def
 
-with socket(AF_INET, SOCK_STREAM) as s:  # Создает сокет TCP
-    s.bind(("", 8007))  # Присваивает порт 8007
+from log.server_log_config import *
+host = ''
+port = 8006
+with socket(AF_INET, SOCK_STREAM) as s:
+    s.bind((host, port))
     s.listen()
-
     while True:
         client, addr = s.accept()
-        with closing(client) as cl:
-            data = cl.recv(1000000)
-            str = data.decode("utf-8")
-            print("Сообщение: ", str, ", было отправлено клиентом:", addr)
-            recv_msg = json.loads(str)
-
-            if "action" in recv_msg and recv_msg['action'] == 'authenticate':
-                with open('json/server_config.json') as f:
-                    message = json.load(f)
-                message = json.dumps(message)
-                cl.send(message.encode("utf-8"))
+        with closing(client):
+            data = client.recv(1000000)
+            print(f"Сообщение: {str(client)}, было отправлено клиентом: {addr} ")
+            data_cl = data.decode('utf-8')
+            message = server_def.server_resp(server_def.client_data(data_cl))
+            message_json = str(message).encode('utf-8')
+            client.send(message_json)
+            server_logger.debug(message)
