@@ -9,4 +9,4 @@ server_log.setFormatter(format)
 server_logger = logging.getLogger("server.log")
 server_logger.setLevel(logging.DEBUG)
 server_logger.addHandler(server_log)
-#
+# server_logger.info('Тестовый запуск логирования')
