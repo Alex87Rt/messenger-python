@@ -4,12 +4,14 @@ import time
 
 def data_clients_input():
     data_time = time.time()
-    data_client_json = {"action": "authenticate",
+    CLIENT_TO_CLIENT = {"action": "msg",
                         "time": data_time,
-                        "user": {
-                            "account_name": "C0deMaver1ck",
-                            "password": "CorrectHorseBatteryStaple"}}
-    data_clients = json.dumps(data_client_json, ensure_ascii=False)
+                        "to": "account_name",
+                        "from": "account_name",
+                        "encoding": "ascii",
+                        "message": "message"
+                        }
+    data_clients = json.dumps(CLIENT_TO_CLIENT, ensure_ascii=False)
     return data_clients
 
 
