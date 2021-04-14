@@ -1,18 +1,201 @@
+import argparse
+import sys
+import helpers
+import logging
+import inspect
+import traceback
+import os
+
 from socket import *
-import client_def
-from contextlib import closing
+from time import *
+import jim
+from storage import DBStorageClient
+import log_config
 
-from log.client_log_config import *
+log = logging.getLogger(helpers.CLIENT_LOGGER_NAME)
 
-host = '127.0.0.1'
-port = 8006
 
-with socket(AF_INET, SOCK_STREAM) as s:
-    client_data_to_send = client_def.client_data_encode()
-    s.connect((host, port))
-    s.send(client_data_to_send)
-    with closing(s):
-        data = s.recv(10000)
-        message = client_def.server_resp_to_str(data)
-        print(message)
-        client_logger.debug(message)
+def parse_commandline_args(cmd_args):
+    parser = argparse.ArgumentParser()
+    parser.add_argument('-s', dest='server_ip', type=str, default=helpers.DEFAULT_SERVER_IP)
+    parser.add_argument('-p', dest='server_port', type=int, default=helpers.DEFAULT_SERVER_PORT)
+    parser.add_argument('-u', dest='user_name', type=str, default=helpers.DEFAULT_CLIENT_LOGIN)
+    return parser.parse_args(cmd_args)
+
+
+class ClientVerifier(type):
+
+    def __init__(cls, clsname, bases, clsdict):
+        tcp_found = False
+
+        for key, value in clsdict.items():
+            if type(value) is socket:
+                raise RuntimeError('Клиент не должен использовать сокеты уровня класса')
+
+            if not hasattr(value, '__call__'):
+                continue
+
+            source = inspect.getsource(value)
+            if '.accept(' in source or '.listen(' in source:
+                raise RuntimeError('Клиент не должен использовать accept или listen для сокетов')
+
+            if 'SOCK_STREAM' in source:
+                tcp_found = True
+
+        if not tcp_found:
+            raise RuntimeError('Клиент должен использовать только сокеты TCP')
+
+        type.__init__(cls, clsname, bases, clsdict)
+
+
+class Client(metaclass=ClientVerifier):
+    def __init__(self, username, storage_file):
+        self.__username = username
+        self.__socket = socket(AF_INET, SOCK_STREAM)
+        self.__storage = DBStorageClient(storage_file)
+
+    def __del__(self):
+        self.__socket.close()
+
+    @property
+    def username(self):
+        return self.__username
+
+    @property
+    def storage(self):
+        return self.__storage
+
+    def send_data(self, data: bytes) -> int:
+        if type(data) is not bytes:
+            raise TypeError
+        return self.__socket.send(data)
+
+    def receive_data(self, size=helpers.TCP_MSG_BUFFER_SIZE) -> bytes:
+        if size <= 0:
+            raise ValueError
+        return self.__socket.recv(size)
+
+    def send_message_to_server(self, msg: jim.JimRequest):
+        msg_bytes = msg.to_bytes()
+        msg_bytes_len = len(msg_bytes)
+        bytes_sent = self.send_data(msg_bytes)
+        if bytes_sent != msg_bytes_len:
+            raise RuntimeError(f'socket.send() returned {bytes_sent}, but expected {msg_bytes_len}')
+
+    def receive_message_from_server(self) -> jim.JimResponse:
+        received_data = self.receive_data()
+        log.debug(received_data)
+        return jim.response_from_bytes(received_data)
+
+    def check_connection(self):
+        request = jim.presence_request(self.__username)
+        self.send_message_to_server(request)
+        response = self.receive_message_from_server()
+        if response.response != 200:
+            raise RuntimeError(f'Presence: expected 200, received {response.response}, error: {response.datadict["error"]}')
+
+    def connect(self, server_ip: str, server_port: int):
+        self.__socket.connect((server_ip, server_port))
+        self.check_connection()
+
+    def update_contacts_from_server(self):
+        request = jim.get_contacts_request()
+        self.send_message_to_server(request)
+        response = self.receive_message_from_server()
+        if response.response != 202:
+            raise RuntimeError(f'Get contacts: expected 202, received: {response.response}, error: {response.datadict["error"]}')
+        contacts_server = []
+        for _ in range(0, response.datadict['quantity']):
+            contact_message = self.receive_message_from_server()
+            if contact_message.datadict['action'] != 'contact_list':
+                raise RuntimeError(f'Получить контакты, received: {contact_message.datadict["action"]}')
+            if contact_message.datadict['user_id'] not in contacts_server:
+                contacts_server.append(contact_message.datadict['user_id'])
+
+        self.storage.update_contacts(contacts_server)
+
+    def add_contact_on_server(self, login: str):
+        if not login:
+            raise RuntimeError('Login cannot be empty')
+        request = jim.add_contact_request(login)
+        self.send_message_to_server(request)
+        response = self.receive_message_from_server()
+        if response.response != 200:
+            raise RuntimeError(f'Добавить контакт: expected response 200, received: {response.response}, error: {response.datadict["error"]}')
+
+    def delete_contact_on_server(self, login: str):
+        if not login:
+            raise RuntimeError('Login cannot be empty')
+        request = jim.delete_contact_request(login)
+        self.send_message_to_server(request)
+        response = self.receive_message_from_server()
+        if response.response != 200:
+            raise RuntimeError(f'Удалить контакт: expected response 200, received: {response.response}, error: {response.datadict["error"]}')
+
+    def get_current_contacts(self):
+        contacts = self.storage.get_contacts()
+        return contacts if contacts else []
+
+    def send_message_to_contact(self, login: str, message: str):
+        if not message:
+            raise RuntimeError('Message cannot be empty')
+        request = jim.message_request(self.username, login, message)
+        self.send_message_to_server(request)
+        response = self.receive_message_from_server()
+        if response.response != 200:
+            raise RuntimeError(f'Отправить сообщение: expected response 200, received: {response.response}, error: {response.datadict["error"]}')
+        self.storage.add_message(login, message)
+
+    def get_messages(self, login: str) -> list:
+        messages = self.storage.get_messages(login)
+        return [{'text': item[0], 'incoming': bool(item[1])} for item in messages]
+
+
+class Menu:
+    def __init__(self, commands: list):
+        self._commands = {i + 1: item for i, item in enumerate(commands)}
+
+    def get_command(self, command_index):
+        return self._commands[command_index]
+
+    def __str__(self):
+        result = '\nChoose command:\n'
+        for key, val in self._commands.items():
+            result += f'{key}. {val}\n'
+        result += '>'
+        return result
+
+
+if __name__ == '__main__':
+    try:
+        args = parse_commandline_args(sys.argv[1:])
+        storage_file = os.path.join(helpers.get_this_script_full_dir(), f'{args.user_name}.sqlite')
+        client = Client(username=args.user_name, storage_file=storage_file)
+        print(f'Запущенный клиент с именем пользователя {client.username}')
+        print(f'Подключение к серверу {args.server_ip} с портом {args.server_port}')
+        client.connect(args.server_ip, args.server_port)
+        print('Подключение')
+        supported_commands = ['get_contacts', 'add_contact', 'delete_contact', 'send_message']
+        main_menu = Menu(supported_commands)
+        while True:
+            user_choice = None
+            try:
+                user_choice = int(input(main_menu))
+                command = main_menu.get_command(user_choice)
+                if command == 'get_contacts':
+                    client.update_contacts_from_server()
+                elif command == 'add_contact':
+                    client.add_contact_on_server(input('Вывести логин добавляемого пользователя:'))
+                elif command == 'delete_contact':
+                    client.delete_contact_on_server(input('Вывести логин пользователя, которого необходимо удалить:'))
+                elif command == 'send_message':
+                    for index, contact in enumerate(client.storage.get_contacts()):
+                        print(f'{index + 1}. {contact}')
+            except KeyboardInterrupt:
+                exit(1)
+            except:
+                traceback.print_exc()
+                continue
+    except Exception as e:
+        log.critical(str(e))
+
