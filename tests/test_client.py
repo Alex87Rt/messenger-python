@@ -11,3 +11,4 @@ def test_data_clients_input():
                             "password": "CorrectHorseBatteryStaple"}}
     data_clients = json.dumps(data_client_json, ensure_ascii=False)
     assert data_clients
+# надо слелать
