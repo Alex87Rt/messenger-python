@@ -3,23 +3,28 @@ import sys
 import helpers
 import logging
 import inspect
-import traceback
 import os
+import security
+import jim
 
 from socket import *
-from time import *
-import jim
 from storage import DBStorageClient
-import log_config
+from threading import Thread
+from queue import Queue
 
 log = logging.getLogger(helpers.CLIENT_LOGGER_NAME)
 
 
 def parse_commandline_args(cmd_args):
     parser = argparse.ArgumentParser()
-    parser.add_argument('-s', dest='server_ip', type=str, default=helpers.DEFAULT_SERVER_IP)
-    parser.add_argument('-p', dest='server_port', type=int, default=helpers.DEFAULT_SERVER_PORT)
-    parser.add_argument('-u', dest='user_name', type=str, default=helpers.DEFAULT_CLIENT_LOGIN)
+    parser.add_argument('-sa', dest='server_ip', type=str, default=helpers.DEFAULT_SERVER_IP,
+                        help='server ip, default 127.0.0.1')
+    parser.add_argument('-sp', dest='server_port', type=int, default=helpers.DEFAULT_SERVER_PORT,
+                        help='server port, default 7777')
+    parser.add_argument('-u', dest='user_name', type=str, default=helpers.DEFAULT_CLIENT_LOGIN,
+                        help='client login, default "TestClient"')
+    parser.add_argument('-p', dest='user_password', type=str, default=helpers.DEFAULT_CLIENT_PASSWORD,
+                        help='client password, default "TestPassword"')
     return parser.parse_args(cmd_args)
 
 
@@ -49,13 +54,41 @@ class ClientVerifier(type):
 
 
 class Client(metaclass=ClientVerifier):
-    def __init__(self, username, storage_file):
+    def __init__(self, username, password, storage_file):
         self.__username = username
+        self.__security_key = security.create_password_hash(password)
         self.__socket = socket(AF_INET, SOCK_STREAM)
         self.__storage = DBStorageClient(storage_file)
+        self.__service_messages = Queue()
+        self.__user_messages = Queue()
+        self.__reader_thread = Thread(target=self.read_messages_thread_function)
+        self.__reader_thread.daemon = True
+        self.__need_terminate = False
 
     def __del__(self):
+        self.close_client()
+
+    def close_client(self):
         self.__socket.close()
+        self.__need_terminate = True
+        self.__reader_thread.join()
+
+    def read_messages_thread_function(self):
+        while True:
+            if self.__need_terminate:
+                return
+            try:
+                msg = self.receive_message_from_server()
+                if 'action' in msg.datadict.keys() and msg.datadict['action'] == 'msg':
+                    self.__user_messages.put(msg)
+                else:  # service message
+                    self.__service_messages.put(msg)
+            except OSError:
+                pass
+
+    @property
+    def user_messages_queue(self):
+        return self.__user_messages
 
     @property
     def username(self):
@@ -84,31 +117,47 @@ class Client(metaclass=ClientVerifier):
 
     def receive_message_from_server(self) -> jim.JimResponse:
         received_data = self.receive_data()
-        log.debug(received_data)
         return jim.response_from_bytes(received_data)
 
     def check_connection(self):
         request = jim.presence_request(self.__username)
         self.send_message_to_server(request)
-        response = self.receive_message_from_server()
+        response = self.__service_messages.get()
+        if response.response == 200:
+            return
+        elif response.response == 401:
+            self.authenticate(response.datadict['token'])
+        else:
+            raise RuntimeError(
+                f'Presence: expected 200, received {response.response}, error: {response.datadict["error"]}')
+
+    def authenticate(self, auth_token: str):
+        auth_digest = security.create_auth_digest(self.__security_key, auth_token)
+        auth_message = jim.auth_client_message(self.__username, auth_digest)
+        self.send_message_to_server(auth_message)
+        response = self.__service_messages.get()
         if response.response != 200:
-            raise RuntimeError(f'Presence: expected 200, received {response.response}, error: {response.datadict["error"]}')
+            raise RuntimeError(f'Authenticate: expected 200, '
+                               f'received {response.response}, error: {response.datadict["error"]}')
 
     def connect(self, server_ip: str, server_port: int):
         self.__socket.connect((server_ip, server_port))
+        self.__reader_thread.start()
         self.check_connection()
 
     def update_contacts_from_server(self):
         request = jim.get_contacts_request()
         self.send_message_to_server(request)
-        response = self.receive_message_from_server()
+        response = self.__service_messages.get()
         if response.response != 202:
-            raise RuntimeError(f'Get contacts: expected 202, received: {response.response}, error: {response.datadict["error"]}')
+            raise RuntimeError(
+                f'Get contacts: expected 202, received: {response.response}, error: {response.datadict["error"]}')
         contacts_server = []
         for _ in range(0, response.datadict['quantity']):
-            contact_message = self.receive_message_from_server()
+            contact_message = self.__service_messages.get()
             if contact_message.datadict['action'] != 'contact_list':
-                raise RuntimeError(f'Получить контакты, received: {contact_message.datadict["action"]}')
+                raise RuntimeError(f'Get contacts: expected action "contact_list", '
+                                   f'received: {contact_message.datadict["action"]}')
             if contact_message.datadict['user_id'] not in contacts_server:
                 contacts_server.append(contact_message.datadict['user_id'])
 
@@ -119,20 +168,22 @@ class Client(metaclass=ClientVerifier):
             raise RuntimeError('Login cannot be empty')
         request = jim.add_contact_request(login)
         self.send_message_to_server(request)
-        response = self.receive_message_from_server()
+        response = self.__service_messages.get()
         if response.response != 200:
-            raise RuntimeError(f'Добавить контакт: expected response 200, received: {response.response}, error: {response.datadict["error"]}')
+            raise RuntimeError(
+                f'Add contact: expected response 200, received: {response.response}, error: {response.datadict["error"]}')
 
     def delete_contact_on_server(self, login: str):
         if not login:
             raise RuntimeError('Login cannot be empty')
         request = jim.delete_contact_request(login)
         self.send_message_to_server(request)
-        response = self.receive_message_from_server()
+        response = self.__service_messages.get()
         if response.response != 200:
-            raise RuntimeError(f'Удалить контакт: expected response 200, received: {response.response}, error: {response.datadict["error"]}')
+            raise RuntimeError(
+                f'Delete contact: expected response 200, received: {response.response}, error: {response.datadict["error"]}')
 
-    def get_current_contacts(self):
+    def get_current_contacts(self) -> list:
         contacts = self.storage.get_contacts()
         return contacts if contacts else []
 
@@ -141,9 +192,10 @@ class Client(metaclass=ClientVerifier):
             raise RuntimeError('Message cannot be empty')
         request = jim.message_request(self.username, login, message)
         self.send_message_to_server(request)
-        response = self.receive_message_from_server()
+        response = self.__service_messages.get()
         if response.response != 200:
-            raise RuntimeError(f'Отправить сообщение: expected response 200, received: {response.response}, error: {response.datadict["error"]}')
+            raise RuntimeError(
+                f'Send message: expected response 200, received: {response.response}, error: {response.datadict["error"]}')
         self.storage.add_message(login, message)
 
     def get_messages(self, login: str) -> list:
@@ -151,51 +203,55 @@ class Client(metaclass=ClientVerifier):
         return [{'text': item[0], 'incoming': bool(item[1])} for item in messages]
 
 
-class Menu:
-    def __init__(self, commands: list):
-        self._commands = {i + 1: item for i, item in enumerate(commands)}
-
-    def get_command(self, command_index):
-        return self._commands[command_index]
-
-    def __str__(self):
-        result = '\nChoose command:\n'
-        for key, val in self._commands.items():
-            result += f'{key}. {val}\n'
-        result += '>'
-        return result
+def check_new_incoming_messages_thread_function(message_queue: Queue):
+    while True:
+        if message_queue:
+            msg = message_queue.get()
+            formatted_message = f"New message from {msg.datadict['from']}: {msg.datadict['message']}"
+            print(formatted_message)
 
 
 if __name__ == '__main__':
     try:
         args = parse_commandline_args(sys.argv[1:])
         storage_file = os.path.join(helpers.get_this_script_full_dir(), f'{args.user_name}.sqlite')
-        client = Client(username=args.user_name, storage_file=storage_file)
+        client = Client(username=args.user_name, password=args.user_password, storage_file=storage_file)
         print(f'Запущенный клиент с именем пользователя {client.username}')
-        print(f'Подключение к серверу {args.server_ip} с портом {args.server_port}')
+        print(f'Connecting to server {args.server_ip} on port {args.server_port}...')
         client.connect(args.server_ip, args.server_port)
-        print('Подключение')
-        supported_commands = ['get_contacts', 'add_contact', 'delete_contact', 'send_message']
-        main_menu = Menu(supported_commands)
+        print('Connected, updating contacts...')
+        client.update_contacts_from_server()
+        print('Starting incoming message monitor thread...')
+        incoming_monitor = Thread(target=check_new_incoming_messages_thread_function,
+                                  args=(client.user_messages_queue,))
+        incoming_monitor.daemon = True
+        incoming_monitor.start()
+        supported_commands = ['show_contacts', 'add_contact', 'delete_contact', 'send_message']
+        main_menu = helpers.Menu(supported_commands)
         while True:
             user_choice = None
             try:
                 user_choice = int(input(main_menu))
                 command = main_menu.get_command(user_choice)
-                if command == 'get_contacts':
+                if command == 'show_contacts':
                     client.update_contacts_from_server()
+                    print(client.get_current_contacts())
                 elif command == 'add_contact':
-                    client.add_contact_on_server(input('Вывести логин добавляемого пользователя:'))
+                    client.add_contact_on_server(input('Print login of user to add: >'))
                 elif command == 'delete_contact':
-                    client.delete_contact_on_server(input('Вывести логин пользователя, которого необходимо удалить:'))
+                    client.delete_contact_on_server(input('Print login of user to delete: >'))
                 elif command == 'send_message':
-                    for index, contact in enumerate(client.storage.get_contacts()):
-                        print(f'{index + 1}. {contact}')
+                    current_contacts = client.get_current_contacts()
+                    if not current_contacts:
+                        print('No contacts available')
+                        continue
+                    login_to = input('Print user login: >')
+                    text = input('Print text: >')
+                    client.send_message_to_contact(login_to, text)
             except KeyboardInterrupt:
                 exit(1)
-            except:
-                traceback.print_exc()
+            except BaseException as e:
+                print(f'Error: {str(e)}')
                 continue
-    except Exception as e:
+    except BaseException as e:
         log.critical(str(e))
-

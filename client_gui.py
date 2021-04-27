@@ -1,16 +1,36 @@
 import sys
-from PyQt5 import QtWidgets, QtGui
-import os
-import traceback
-import logging
-
 import client_pyqt
-from client import Client
+import os
+import logging
 import helpers
 
-# import log_confing
+from PyQt5 import QtWidgets, QtGui
+from PyQt5.QtCore import QObject, QThread, pyqtSignal, pyqtSlot
+from client import Client
+from jim import request_from_bytes
+
 
 log = logging.getLogger(helpers.CLIENT_LOGGER_NAME)
+
+ERROR_FORMAT = 'Error: {}'
+
+
+class ClientMonitor(QObject):
+    gotUserMessage = pyqtSignal(bytes)
+
+    def __init__(self, parent):
+        super().__init__()
+        self.parent = parent
+        self._user_messages_queue = None
+
+    def set_queue(self, queue):
+        self._user_messages_queue = queue
+
+    def check_new_messages(self):
+        while True:
+            if self._user_messages_queue:
+                msg = self._user_messages_queue.get()
+                self.gotUserMessage.emit(msg.to_bytes())
 
 
 class MainWindow(QtWidgets.QMainWindow):
@@ -23,6 +43,7 @@ class MainWindow(QtWidgets.QMainWindow):
         self.ui.label_server_port_val.setText('')
         self.client = None
         self.username = None
+        self.password = None
         self.server_ip = None
         self.server_port = None
 
@@ -30,7 +51,26 @@ class MainWindow(QtWidgets.QMainWindow):
         self.ui.pushButton_add_contact.clicked.connect(self.add_contact_click)
         self.ui.pushButton_delete_contact.clicked.connect(self.delete_contact_click)
         self.ui.pushButton_send.clicked.connect(self.send_message_click)
-        self.ui.listWidget_contacts.itemDoubleClicked.connect(self.contact_double_clicked)
+        self.ui.listWidget_contacts.itemClicked.connect(self.contact_clicked)
+        # create monitor and thread
+        self.monitor = ClientMonitor(self)
+        self.thread = QThread()
+        self.monitor.moveToThread(self.thread)
+        self.monitor.gotUserMessage.connect(self.new_message_received)
+        self.thread.started.connect(self.monitor.check_new_messages)
+
+    @pyqtSlot(bytes)
+    def new_message_received(self, msg_bytes):
+        msg = request_from_bytes(msg_bytes)
+        login = msg.datadict['from']
+        text = msg.datadict['message']
+        if not self.client.storage.get_contact_id(login):
+            self.client.add_contact_on_server(login)
+            self.client.update_contacts_from_server()
+            self.update_contacts_widget()
+        self.client.storage.add_message(login, text, True)
+        if login == self.get_current_contact():
+            self.update_messages_widget(login)
 
     def print_info(self, info: str):
         current_text = self.ui.textBrowser_service_info.toPlainText()
@@ -39,8 +79,11 @@ class MainWindow(QtWidgets.QMainWindow):
         self.ui.textBrowser_service_info.moveCursor(QtGui.QTextCursor.End)
 
     def clear_state(self):
+        self.monitor.set_queue(None)
+        self.client.close_client()
         self.client = None
         self.username = None
+        self.password = None
         self.server_ip = None
         self.server_port = None
 
@@ -50,11 +93,11 @@ class MainWindow(QtWidgets.QMainWindow):
                 self.client.check_connection()
                 self.print_info('Already connected')
                 return
-            except:
-                self.print_info(traceback.format_exc())
-
+            except BaseException as e:
+                self.print_info(ERROR_FORMAT.format(str(e)))
 
         username = self.ui.lineEdit_username.text()
+        password = self.ui.lineEdit_password.text()
         server_ip = self.ui.lineEdit_server_ip.text()
         server_port_str = self.ui.lineEdit_server_port.text()
         if not username or not server_ip or not server_port_str:
@@ -64,21 +107,42 @@ class MainWindow(QtWidgets.QMainWindow):
         try:
             server_port = int(server_port_str)
             self.username = username
+            self.password = password
             storage_file = os.path.join(helpers.get_this_script_full_dir(), f'{self.username}.sqlite')
             self.server_ip = server_ip
             self.server_port = server_port
-            self.client = Client(self.username, self.storage_file)
+            self.client = Client(username=self.username, password=self.password, storage_file=storage_file)
             self.print_info(f'Connecting to server {self.server_ip} on port {str(self.server_port)}...')
-            self.client = Client(self.username, storage_file)
+            self.client.connect(self.server_ip, self.server_port)
             self.print_info('Connected')
             self.ui.label_username_val.setText(self.username)
             self.ui.label_server_ip_val.setText(self.server_ip)
             self.ui.label_server_port_val.setText(str(self.server_port))
             self.client.update_contacts_from_server()
             self.update_contacts_widget()
-        except:
-            self.print_info(traceback.format_exc())
+            self.monitor.set_queue(self.client.user_messages_queue)
+            self.thread.start()
+        except BaseException as e:
+            self.print_info(ERROR_FORMAT.format(str(e)))
             self.clear_state()
+
+    def clear_parameters_widgets(self):
+        self.ui.label_username_val.clear()
+        self.ui.label_server_ip_val.clear()
+        self.ui.label_server_port_val.clear()
+
+    def disconnect_click(self):
+        if not self.client:
+            self.print_info('Not connected')
+            return
+        self.print_info('Disconnecting')
+        self.clear_state()
+        self.clear_parameters_widgets()
+        self.clear_messages_widget()
+        self.clear_contacts_widget()
+
+    def clear_contacts_widget(self):
+        self.ui.listWidget_contacts.clear()
 
     def update_contacts_widget(self):
         contacts = self.client.get_current_contacts()
@@ -93,7 +157,7 @@ class MainWindow(QtWidgets.QMainWindow):
             self.client.update_contacts_from_server()
             self.update_contacts_widget()
         except BaseException as e:
-            self.print_info(f'Error: {str(e)}')
+            self.print_info(ERROR_FORMAT.format(str(e)))
 
     def delete_contact_click(self):
         try:
@@ -103,7 +167,7 @@ class MainWindow(QtWidgets.QMainWindow):
             self.update_contacts_widget()
             self.clear_messages_widget()
         except BaseException as e:
-            self.print_info(f'Error: {str(e)}')
+            self.print_info(ERROR_FORMAT.format(str(e)))
 
     def send_message_click(self):
         try:
@@ -119,8 +183,8 @@ class MainWindow(QtWidgets.QMainWindow):
             self.client.send_message_to_contact(login, text)
             self.update_messages_widget(login)
             self.ui.textEdit_input.clear()
-        except:
-            self.print_info(traceback.format_exc())
+        except BaseException as e:
+            self.print_info(ERROR_FORMAT.format(str(e)))
 
         def format_message(self, login: str, message: dict) -> str:
             """Format message dict returned by Client.get_messages()"""
@@ -138,9 +202,13 @@ class MainWindow(QtWidgets.QMainWindow):
             self.ui.textBrowser_messages.setText(messages_widget_text)
             self.ui.textBrowser_messages.moveCursor(QtGui.QTextCursor.End)
 
-        def contact_double_clicked(self):
-            login = self.ui.listWidget_contacts.selectedItems()[0].text()
+        def contact_clicked(self):
+            login = self.get_current_contact()
             self.update_messages_widget(login)
+
+        def get_current_contact(self):
+            selected_items = self.ui.listWidget_contacts.selectedItems()
+            return self.ui.listWidget_contacts.selectedItems()[0].text() if selected_items else None
 
         def clear_messages_widget(self):
             self.ui.textBrowser_messages.clear()

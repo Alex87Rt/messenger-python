@@ -46,6 +46,21 @@ class DBStorageServer(DBStorage):
         self._cursor.execute('SELECT `id` FROM `Clients` WHERE `login` == ?', (login,))
         return self._cursor.fetchall()[0][0]
 
+    def get_clients(self):
+        self._cursor.execute(
+            '''
+            SELECT `login`, `last_connect_time`, `last_connect_ip`
+            FROM `Clients`
+            ORDER BY `last_connect_time` DESC
+            '''
+        )
+        result = self._cursor.fetchall()
+        return result if result else []
+
+    def get_client_hash(self, login: str) -> str:
+        self._cursor.execute('SELECT `info` FROM `Clients` WHERE `login` == ?', (login,))
+        return self._cursor.fetchall()[0][0]
+
     def check_client_exists(self, login: str) -> bool:
         try:
             self.get_client_id(login)
@@ -53,25 +68,26 @@ class DBStorageServer(DBStorage):
         except IndexError:
             return False
 
-    def add_client(self, login: str):
+    def add_client(self, login: str, password_hash: str):
         if not login:
-            raise ValueError('логин не может быть ни пустым, ни пустым')
-        self._cursor.execute('INSERT INTO `Clients` VALUES (NULL, ?, NULL, NULL, NULL)', (login,))
+            raise ValueError('login cannot be None or empty')
+        if not password_hash:
+            raise ValueError('password hash cannot be None or empty')
+        if self.check_client_exists(login) is True:
+            raise RuntimeError(f'client with this login already exists: {login}')
+        self._cursor.execute('INSERT INTO `Clients` VALUES (NULL, ?, ?, NULL, NULL)', (login, password_hash))
         self._conn.commit()
 
-    def update_client(self, login: str, connection_time: float, connection_ip: str, info=None):
-        if not self.check_client_exists(login):
-            self.add_client(login)
+    def update_client(self, login: str, connection_time: float, connection_ip: str):
 
         client_id = self.get_client_id(login)
         self._cursor.execute(
             """
             UPDATE `Clients` SET 
-                `info` = ?, 
                 `last_connect_time` = ?, 
                 `last_connect_ip` = ? 
             WHERE `id` == ?;
-            """, (info, connection_time, connection_ip, client_id)
+            """, (connection_time, connection_ip, client_id)
         )
         self._conn.commit()
 
