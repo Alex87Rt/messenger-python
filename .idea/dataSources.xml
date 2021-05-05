@@ -20,5 +20,17 @@
         </library>
       </libraries>
     </data-source>
+    <data-source source="LOCAL" name="TestClietn" uuid="2d0289cc-1dd2-491e-aa58-a6a41a0c63e1">
+      <driver-ref>sqlite.xerial</driver-ref>
+      <synchronize>true</synchronize>
+      <jdbc-driver>org.sqlite.JDBC</jdbc-driver>
+      <jdbc-url>jdbc:sqlite:D:\WORK\Study\Клиент-серверные приложения на Python\messenger-python\TestClietn.sqlite</jdbc-url>
+      <working-dir>$ProjectFileDir$</working-dir>
+      <libraries>
+        <library>
+          <url>file://$APPLICATION_CONFIG_DIR$/jdbc-drivers/Xerial SQLiteJDBC/3.34.0/sqlite-jdbc-3.34.0.jar</url>
+        </library>
+      </libraries>
+    </data-source>
   </component>
 </project>

@@ -1,2 +1,0 @@
-# messenger-python
-messenger-python
