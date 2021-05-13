@@ -1,7 +1,8 @@
 import hashlib
-from os import urandom
 import hmac
 import binascii
+
+from os import urandom
 
 HASH_ALGORITHM = 'sha256'
 HASH_SALT = b'\xca\xfe\xbe\xef'
@@ -20,7 +21,8 @@ def hexstring_to_bytes(hexstring: str) -> bytes:
 def create_password_hash(password: str) -> str:
     if not password:
         raise RuntimeError('password value empty or incorrect')
-    digest = hashlib.pbkdf2_hmac(HASH_ALGORITHM, password.encode('utf-8'), HASH_SALT, HASH_ITERATIONS)
+    digest = hashlib.pbkdf2_hmac(HASH_ALGORITHM, password.encode('utf-8'),
+                                 HASH_SALT, HASH_ITERATIONS)
     return bytes_to_hexstring(digest)
 
 
@@ -31,7 +33,8 @@ def create_auth_token() -> str:
 def create_auth_digest(secret: str, token: str) -> str:
     if not secret or not token:
         raise RuntimeError('secret or token value empty or incorrect')
-    digest = hmac.new(hexstring_to_bytes(secret), hexstring_to_bytes(token)).digest()
+    digest = hmac.new(hexstring_to_bytes(secret),
+                      hexstring_to_bytes(token)).digest()
     return bytes_to_hexstring(digest)
 
 
