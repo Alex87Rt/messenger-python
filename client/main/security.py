@@ -1,7 +1,7 @@
 import hashlib
-from os import urandom
 import hmac
 
+from os import urandom
 from client.main.helpers import bytes_to_hexstring, hexstring_to_bytes
 
 HASH_ALGORITHM = 'sha256'
@@ -13,7 +13,8 @@ AUTH_TOKEN_LEN = 16
 def create_password_hash(password: str) -> str:
     if not password:
         raise RuntimeError('значение пароля пустое или неверное')
-    digest = hashlib.pbkdf2_hmac(HASH_ALGORITHM, password.encode('utf-8'), HASH_SALT, HASH_ITERATIONS)
+    digest = hashlib.pbkdf2_hmac(HASH_ALGORITHM, password.encode('utf-8'),
+                                 HASH_SALT, HASH_ITERATIONS)
     return bytes_to_hexstring(digest)
 
 
@@ -24,7 +25,8 @@ def create_auth_token() -> str:
 def create_auth_digest(secret: str, token: str) -> str:
     if not secret or not token:
         raise RuntimeError
-    digest = hmac.new(hexstring_to_bytes(secret), hexstring_to_bytes(token)).digest()
+    digest = hmac.new(hexstring_to_bytes(secret),
+                      hexstring_to_bytes(token)).digest()
     return bytes_to_hexstring(digest)
 
 

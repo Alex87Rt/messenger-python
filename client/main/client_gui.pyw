@@ -1,9 +1,9 @@
 import sys
-from PyQt5 import QtWidgets, QtGui
-from PyQt5.QtCore import *
 import os
 import logging
 
+from PyQt5 import QtWidgets, QtGui
+from PyQt5.QtCore import *
 from client.main import client_pyqt
 from client.main.client import client
 from client.main import helpers
@@ -99,7 +99,6 @@ class MainWindow(QtWidgets.QMainWindow):
             except BaseException as e:
                 self.print_info(ERROR_FORMAT.format(str(e)))
 
-
         username = self.ui.lineEdit_username.text()
         password = self.ui.lineEdit_password.text()
         server_ip = self.ui.lineEdit_server_ip.text()
@@ -107,7 +106,6 @@ class MainWindow(QtWidgets.QMainWindow):
         if not username or not server_ip or not server_port_str:
             self.print_info('Error: user name, server ip and server port cannot be empty')
             return
-
 
         try:
             server_port = int(server_port_str)

@@ -1,12 +1,12 @@
 import sys
-from PyQt5 import QtWidgets, QtGui
-from PyQt5.QtCore import *
 import os
 import traceback
 import logging
 import datetime
 import server_pyqt
 
+from PyQt5 import QtWidgets, QtGui
+from PyQt5.QtCore import *
 from server.main import helpers
 from server.main.server import server
 from server.main.storage import DBStorageServer
@@ -43,7 +43,8 @@ class MainWindow(QtWidgets.QMainWindow):
         self.server = None
         self.listen_ip = None
         self.listen_port = None
-        self.storage_name = os.path.join(helpers.get_this_script_full_dir(), 'server.sqlite')
+        self.storage_name = os.path.join(helpers.get_this_script_full_dir(),
+                                         'server.sqlite')
         self.storage = DBStorageServer(self.storage_name)
 
         # connect slots
@@ -75,10 +76,16 @@ class MainWindow(QtWidgets.QMainWindow):
         current_clients = self.storage.get_clients()
         self.ui.tableWidget_clients.setRowCount(len(current_clients))
         for index, client in enumerate(current_clients):
-            self.ui.tableWidget_clients.setItem(index, 0, QtWidgets.QTableWidgetItem(client[0]))
-            last_time = datetime.datetime.fromtimestamp(client[1]).strftime('%Y-%m-%d %H:%M:%S') if client[1] else None
-            self.ui.tableWidget_clients.setItem(index, 1, QtWidgets.QTableWidgetItem(last_time))
-            self.ui.tableWidget_clients.setItem(index, 2, QtWidgets.QTableWidgetItem((client[2])))
+            self.ui.tableWidget_clients.setItem(index, 0,
+                                                QtWidgets.QTableWidgetItem(client[0]))
+            last_time = datetime.datetime.fromtimestamp(client[1]).strftime('%Y-%m-%d %H:%M:%S') \
+                if client[1] else None
+            self.ui.tableWidget_clients.setItem(index,
+                                                1,
+                                                QtWidgets.QTableWidgetItem(last_time))
+            self.ui.tableWidget_clients.setItem(index,
+                                                2,
+                                                QtWidgets.QTableWidgetItem((client[2])))
 
     def add_new_client_click(self):
         try:
@@ -88,10 +95,13 @@ class MainWindow(QtWidgets.QMainWindow):
                 self.print_info('Логин и пароль должны быть заполнены')
                 return
             if self.storage.check_client_exists(client_login):
-                self.print_info(f'Пользователь с таким логином уже существует: {client_login}')
+                self.print_info(f'Пользователь с таким логином '
+                                f'уже существует: {client_login}')
                 return
-            self.storage.add_client(client_login, create_password_hash(client_password))
-            self.print_info(f'Пользователь добавлен: {client_login}')
+            self.storage.add_client(client_login,
+                                    create_password_hash(client_password))
+            self.print_info(f'Пользователь добавлен: '
+                            f'{client_login}')
             self.update_clients_table()
         except:
             self.print_info(traceback.format_exc())
@@ -104,7 +114,9 @@ class MainWindow(QtWidgets.QMainWindow):
             self.print_info('Старт сервера')
             self.listen_ip = self.ui.lineEdit_ip.text()
             self.listen_port = int(self.ui.lineEdit_port.text())
-            self.server = server(self.listen_ip, self.listen_port, self.storage_name)
+            self.server = server(self.listen_ip,
+                                 self.listen_port,
+                                 self.storage_name)
             self.server.start()
             self.monitor.set_queue(self.server.print_queue)
             self.monitor_thread.start()

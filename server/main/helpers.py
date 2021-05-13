@@ -1,7 +1,8 @@
 import os
-from functools import wraps
 import inspect
 import binascii
+
+from functools import wraps
 
 DEFAULT_SERVER_PORT = 8006
 TCP_MSG_BUFFER_SIZE = 1024
@@ -22,7 +23,8 @@ def log_func_call(logger):
         @wraps(func)
         def log_func_call_decorated(*args, **kwargs):
             ret = func(*args, **kwargs)
-            logger.info(f'Called function {func.__name__} with parameters: {args} {kwargs}, returned: {ret}, '
+            logger.info(f'Called function {func.__name__} '
+                        f'with parameters: {args} {kwargs}, returned: {ret}, '
                         f'caller name: {str(inspect.stack()[1][3])}')
             return ret
 
